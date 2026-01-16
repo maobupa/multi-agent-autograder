@@ -18,6 +18,36 @@ from typing import List, Optional, Union, Tuple, Set, Dict, Any
 from enum import Enum
 import math
 
+# Flag to control whether to use LLM for message classification
+# Set to False to use fallback fuzzy matching (faster, no API calls)
+USE_LLM_CLASSIFICATION = True
+
+# Lazy import of LLM classifiers to avoid circular imports
+_message_classifier = None
+_input_prompt_classifier = None
+
+def _get_message_classifier():
+    """Lazily initialize and return the message classifier singleton."""
+    global _message_classifier
+    if _message_classifier is None and USE_LLM_CLASSIFICATION:
+        try:
+            from llm_agents import MessageClassifierAgent
+            _message_classifier = MessageClassifierAgent()
+        except ImportError:
+            pass
+    return _message_classifier
+
+def _get_input_prompt_classifier():
+    """Lazily initialize and return the input prompt classifier singleton."""
+    global _input_prompt_classifier
+    if _input_prompt_classifier is None and USE_LLM_CLASSIFICATION:
+        try:
+            from llm_agents import InputPromptClassifierAgent
+            _input_prompt_classifier = InputPromptClassifierAgent()
+        except ImportError:
+            pass
+    return _input_prompt_classifier
+
 
 # =============================================================================
 # INTERVAL ARITHMETIC
@@ -335,13 +365,16 @@ class InputNode(CDGNode):
         var_name: Variable name the input is assigned to
         input_type: Type conversion applied (float, int, str, None)
         prompt: Prompt text shown to user
+        prompt_category: Semantic category of prompt ('height', 'other')
     """
     
-    def __init__(self, var_name: str, input_type: Optional[str] = None, prompt: str = ""):
+    def __init__(self, var_name: str, input_type: Optional[str] = None, prompt: str = "", 
+                 prompt_category: Optional[str] = None):
         super().__init__()
         self.var_name = var_name
         self.input_type = input_type  # 'float', 'int', 'str', or None
         self.prompt = prompt
+        self.prompt_category = prompt_category  # 'height', 'other', or None (unclassified)
     
     def semantic_signature(self) -> Tuple:
         # For semantic comparison, variable name doesn't matter
@@ -351,7 +384,8 @@ class InputNode(CDGNode):
     def __repr__(self) -> str:
         type_str = f"type={self.input_type}" if self.input_type else "type=str"
         prompt_str = f'prompt="{self.prompt}"' if self.prompt else ""
-        return f"InputNode({type_str}, {prompt_str})"
+        cat_str = f", category={self.prompt_category}" if self.prompt_category else ""
+        return f"InputNode({type_str}, {prompt_str}{cat_str})"
 
 
 class ControlType(Enum):
@@ -519,6 +553,10 @@ class CDGBuilder:
         # Maps constant name -> numeric value
         self.constants: Dict[str, float] = {}
         
+        # Track string constants for resolving print messages
+        # Maps constant name -> string value
+        self.string_constants: Dict[str, str] = {}
+        
         self._parse()
     
     def _parse(self):
@@ -563,21 +601,26 @@ class CDGBuilder:
     def _scan_constants(self, body: List[ast.stmt]):
         """
         Scan for module-level constant assignments.
-        Constants are identified as UPPERCASE variable names assigned to numeric literals.
+        Includes both UPPERCASE and lowercase variable names that look like constants.
+        Also scans for string constants used in print statements.
         """
         for stmt in body:
             if isinstance(stmt, ast.Assign):
                 if len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
                     var_name = stmt.targets[0].id
-                    # Check if it looks like a constant (UPPERCASE or contains underscore with uppercase)
-                    if var_name.isupper() or (var_name.upper() == var_name and '_' in var_name):
-                        # Check if assigned to a numeric literal
-                        if isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, (int, float)):
+                    
+                    # Check for numeric constants (any variable assigned to a number)
+                    # Include both UPPERCASE and lowercase (like astronaut_height_min)
+                    if isinstance(stmt.value, ast.Constant):
+                        if isinstance(stmt.value.value, (int, float)):
                             self.constants[var_name] = float(stmt.value.value)
-                        # Also handle negative numbers: -1.6
-                        elif isinstance(stmt.value, ast.UnaryOp) and isinstance(stmt.value.op, ast.USub):
-                            if isinstance(stmt.value.operand, ast.Constant) and isinstance(stmt.value.operand.value, (int, float)):
-                                self.constants[var_name] = -float(stmt.value.operand.value)
+                        elif isinstance(stmt.value.value, str):
+                            # String constant
+                            self.string_constants[var_name] = stmt.value.value
+                    # Also handle negative numbers: -1.6
+                    elif isinstance(stmt.value, ast.UnaryOp) and isinstance(stmt.value.op, ast.USub):
+                        if isinstance(stmt.value.operand, ast.Constant) and isinstance(stmt.value.operand.value, (int, float)):
+                            self.constants[var_name] = -float(stmt.value.operand.value)
     
     def _process_statement(self, stmt: ast.stmt) -> List[CDGNode]:
         """Convert an AST statement to CDG node(s)"""
@@ -624,6 +667,27 @@ class CDGBuilder:
         
         return nodes
     
+    def _extract_string_from_ast(self, node: ast.expr) -> str:
+        """
+        Extract string content from various AST node types.
+        Handles: Constant, JoinedStr (f-strings), and Name (variable references).
+        """
+        if isinstance(node, ast.Constant):
+            return str(node.value)
+        elif isinstance(node, ast.JoinedStr):
+            # f-string: extract just the string parts, ignore expressions
+            parts = []
+            for part in node.values:
+                if isinstance(part, ast.Constant):
+                    parts.append(str(part.value))
+                # Skip FormattedValue nodes (the {variable} parts)
+            return "".join(parts)
+        elif isinstance(node, ast.Name):
+            # Variable reference - check if it's a known string constant
+            if node.id in self.string_constants:
+                return self.string_constants[node.id]
+        return ""
+    
     def _track_raw_input(self, value: ast.expr, var_name: str) -> bool:
         """
         Track raw input() calls for multi-line input patterns.
@@ -632,11 +696,27 @@ class CDGBuilder:
         if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
             if value.func.id == 'input':
                 prompt = ""
-                if value.args and isinstance(value.args[0], ast.Constant):
-                    prompt = str(value.args[0].value)
+                if value.args:
+                    prompt = self._extract_string_from_ast(value.args[0])
                 self.input_vars[var_name] = prompt
                 return True
         return False
+    
+    def _create_input_node(self, var_name: str, input_type: str, prompt: str) -> InputNode:
+        """
+        Create an InputNode with prompt classification.
+        Uses LLM to classify the prompt into categories (height, other).
+        """
+        prompt_category = None
+        if prompt and USE_LLM_CLASSIFICATION:
+            classifier = _get_input_prompt_classifier()
+            if classifier:
+                try:
+                    prompt_category = classifier.classify(prompt)
+                except Exception:
+                    pass  # Keep prompt_category as None on error
+        
+        return InputNode(var_name, input_type, prompt, prompt_category)
     
     def _check_deferred_type_conversion(self, value: ast.expr, var_name: str) -> Optional[InputNode]:
         """
@@ -654,7 +734,7 @@ class CDGBuilder:
                         self.var_types[var_name] = type_name
                         # Remove from input_vars to avoid creating duplicate InputNodes
                         del self.input_vars[input_var]
-                        return InputNode(var_name, type_name, prompt)
+                        return self._create_input_node(var_name, type_name, prompt)
         return None
     
     def _extract_input_node(self, value: ast.expr, var_name: str) -> Optional[InputNode]:
@@ -669,11 +749,11 @@ class CDGBuilder:
                     inner_call = value.args[0]
                     if isinstance(inner_call.func, ast.Name) and inner_call.func.id == 'input':
                         prompt = ""
-                        if inner_call.args and isinstance(inner_call.args[0], ast.Constant):
-                            prompt = str(inner_call.args[0].value)
+                        if inner_call.args:
+                            prompt = self._extract_string_from_ast(inner_call.args[0])
                         
                         self.var_types[var_name] = type_name
-                        return InputNode(var_name, type_name, prompt)
+                        return self._create_input_node(var_name, type_name, prompt)
                 
                 # Pattern 2: float(var) or int(var) where var was assigned from input()
                 # This handles multi-line input patterns
@@ -684,8 +764,8 @@ class CDGBuilder:
             # Pattern 3: input("...") directly - track for potential later conversion
             elif type_name == 'input':
                 prompt = ""
-                if value.args and isinstance(value.args[0], ast.Constant):
-                    prompt = str(value.args[0].value)
+                if value.args:
+                    prompt = self._extract_string_from_ast(value.args[0])
                 
                 # Track this for potential multi-line pattern
                 # Don't create InputNode yet - wait to see if there's a type conversion
@@ -704,7 +784,7 @@ class CDGBuilder:
         """
         nodes = []
         for var_name, prompt in self.input_vars.items():
-            nodes.append(InputNode(var_name, 'str', prompt))
+            nodes.append(self._create_input_node(var_name, 'str', prompt))
         self.input_vars.clear()
         return nodes
     
@@ -802,8 +882,18 @@ class CDGBuilder:
         if isinstance(call.func, ast.Name) and call.func.id == 'print':
             message = ""
             if call.args:
-                if isinstance(call.args[0], ast.Constant):
-                    message = str(call.args[0].value)
+                arg = call.args[0]
+                if isinstance(arg, ast.Constant):
+                    message = str(arg.value)
+                elif isinstance(arg, ast.Name):
+                    # Check if it's a known string constant
+                    if arg.id in self.string_constants:
+                        message = self.string_constants[arg.id]
+                    else:
+                        message = "<complex_expr>"
+                elif isinstance(arg, ast.JoinedStr):
+                    # f-string
+                    message = self._extract_string_from_ast(arg)
                 else:
                     message = "<complex_expr>"
             
@@ -1157,4 +1247,456 @@ def print_cdg(code: str):
     """Build and print CDG for a piece of code"""
     builder = CDGBuilder(code)
     builder.print_cdg()
+
+
+# =============================================================================
+# SEMANTIC MESSAGE COMPARISON
+# =============================================================================
+
+def _normalize_message(msg: str) -> str:
+    """Normalize a message for comparison (lowercase, strip whitespace)"""
+    return msg.lower().strip()
+
+
+def _levenshtein_distance(s1: str, s2: str) -> int:
+    """Calculate the Levenshtein distance between two strings."""
+    if len(s1) < len(s2):
+        return _levenshtein_distance(s2, s1)
+    
+    if len(s2) == 0:
+        return len(s1)
+    
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    
+    return previous_row[-1]
+
+
+def _fuzzy_word_match(word: str, target_words: set, max_distance: int = 2) -> bool:
+    """Check if a word fuzzy-matches any word in the target set."""
+    word = word.lower()
+    for target in target_words:
+        if _levenshtein_distance(word, target) <= max_distance:
+            return True
+    return False
+
+
+def _extract_message_semantics(msg: str) -> Dict[str, Any]:
+    """
+    Extract semantic features from a message.
+    Returns a dict with semantic indicators.
+    Uses fuzzy matching to handle typos.
+    """
+    msg = _normalize_message(msg)
+    msg_words = set(msg.split())
+    
+    semantics = {
+        'direction': None,      # 'above', 'below', 'correct', 'other'
+        'has_limit_word': False, # 'minimum', 'maximum', 'min', 'max'
+        'is_positive': None,    # True for success/correct, False for failure/error
+    }
+    
+    # Direction indicators - use stricter matching (max_distance=1) to avoid
+    # false positives like "height" matching "high"
+    above_words = {'above', 'over', 'high', 'tall', 'exceed', 'greater'}
+    below_words = {'below', 'under', 'low', 'short', 'less', 'smaller'}
+    correct_words = {'correct', 'ok', 'good', 'valid', 'acceptable', 'pass', 'success', 'right'}
+    incorrect_words = {'incorrect', 'wrong', 'invalid', 'fail', 'error', 'bad'}
+    
+    # Words to exclude from direction matching (common words that cause false positives)
+    exclude_words = {'height', 'astronaut', 'meters', 'enter', 'your'}
+    
+    # Check for direction using fuzzy matching with stricter threshold
+    for msg_word in msg_words:
+        if msg_word in exclude_words:
+            continue
+        # Use max_distance=1 for short direction words to avoid false positives
+        if semantics['direction'] is None and _fuzzy_word_match(msg_word, above_words, max_distance=1):
+            semantics['direction'] = 'above'
+        elif semantics['direction'] is None and _fuzzy_word_match(msg_word, below_words, max_distance=1):
+            semantics['direction'] = 'below'
+        elif semantics['direction'] is None and _fuzzy_word_match(msg_word, correct_words, max_distance=1):
+            semantics['direction'] = 'correct'
+            semantics['is_positive'] = True
+        elif semantics['direction'] is None and _fuzzy_word_match(msg_word, incorrect_words, max_distance=1):
+            semantics['direction'] = 'incorrect'
+            semantics['is_positive'] = False
+    
+    # Also check for phrases (exact match)
+    phrase_above = {'too high', 'too tall'}
+    phrase_below = {'too low', 'too short'}
+    for phrase in phrase_above:
+        if phrase in msg:
+            semantics['direction'] = 'above'
+            break
+    for phrase in phrase_below:
+        if phrase in msg:
+            semantics['direction'] = 'below'
+            break
+    
+    # Check for limit words using fuzzy matching (can be more lenient here)
+    limit_words = {'minimum', 'maximum', 'min', 'max', 'limit'}
+    for msg_word in msg_words:
+        if _fuzzy_word_match(msg_word, limit_words, max_distance=2):
+            semantics['has_limit_word'] = True
+            break
+    
+    return semantics
+
+
+def messages_semantically_similar(msg1: str, msg2: str) -> bool:
+    """
+    Check if two messages are semantically similar using LLM classification.
+    
+    Messages are similar if they convey the same directional meaning:
+    - Both indicate "above" (e.g., "Above max height" ~ "Too tall")
+    - Both indicate "below" (e.g., "Below minimum" ~ "Too short")
+    - Both indicate "correct" (e.g., "OK" ~ "Valid height")
+    
+    Uses LLM to classify messages into categories: above, below, correct, other.
+    Falls back to fuzzy matching if LLM is not available.
+    
+    Returns:
+        True if messages are semantically similar, False otherwise
+    """
+    # Exact match (after normalization)
+    if _normalize_message(msg1) == _normalize_message(msg2):
+        return True
+    
+    # Empty messages
+    if not msg1.strip() and not msg2.strip():
+        return True
+    if not msg1.strip() or not msg2.strip():
+        return False
+    
+    # Try LLM-based classification first
+    classifier = _get_message_classifier()
+    if classifier is not None:
+        try:
+            cat1 = classifier.classify(msg1)
+            cat2 = classifier.classify(msg2)
+            # Both must have the same category to be similar
+            # "other" messages are only similar if they're exact matches (already checked above)
+            if cat1 == "other" or cat2 == "other":
+                return False
+            return cat1 == cat2
+        except Exception:
+            # Fall through to fuzzy matching on error
+            pass
+    
+    # Fallback: fuzzy matching approach
+    return _messages_similar_fuzzy(msg1, msg2)
+
+
+def _messages_similar_fuzzy(msg1: str, msg2: str) -> bool:
+    """
+    Fallback fuzzy matching for message similarity.
+    Used when LLM classification is not available.
+    """
+    # Extract semantics using fuzzy matching
+    sem1 = _extract_message_semantics(msg1)
+    sem2 = _extract_message_semantics(msg2)
+    
+    # If we couldn't extract direction from either, fall back to substring match
+    if sem1['direction'] is None or sem2['direction'] is None:
+        # Check if one contains the other or they share significant words
+        words1 = set(_normalize_message(msg1).split())
+        words2 = set(_normalize_message(msg2).split())
+        # Remove common words
+        stopwords = {'the', 'a', 'an', 'is', 'are', 'to', 'be', 'your', 'you', 'height', 'astronaut'}
+        words1 = words1 - stopwords
+        words2 = words2 - stopwords
+        # If at least 50% words overlap, consider similar
+        if words1 and words2:
+            overlap = len(words1 & words2) / min(len(words1), len(words2))
+            return overlap >= 0.5
+        return False
+    
+    # Compare direction - they must match
+    return sem1['direction'] == sem2['direction']
+
+
+# =============================================================================
+# CDG EQUIVALENCE (Boolean comparison)
+# =============================================================================
+
+def _normalize_consecutive_ifs(children: List[CDGNode]) -> List[CDGNode]:
+    """
+    Normalize consecutive single-branch IF statements into a single
+    multi-branch control structure for comparison purposes.
+    
+    This handles the case where:
+    - Code A uses: if cond1: ... if cond2: ... if cond3: ...
+    - Code B uses: if cond1: ... elif cond2: ... elif cond3: ...
+    
+    If the regions are mutually exclusive, they should be treated as equivalent.
+    """
+    if not children:
+        return children
+    
+    normalized = []
+    i = 0
+    
+    while i < len(children):
+        child = children[i]
+        
+        # Check if this is a single-branch IF ControlNode
+        if (isinstance(child, ControlNode) and 
+            child.control_type == ControlType.IF and 
+            len(child.branches) == 1 and
+            len(child.children) == 0):  # Not a while True with content
+            
+            # Collect consecutive single-branch IFs
+            merged_branches = []
+            start_idx = i
+            
+            while (i < len(children) and 
+                   isinstance(children[i], ControlNode) and
+                   children[i].control_type == ControlType.IF and
+                   len(children[i].branches) == 1 and
+                   len(children[i].children) == 0):
+                merged_branches.append(children[i].branches[0])
+                i += 1
+            
+            # If we merged multiple, create a virtual merged ControlNode
+            if len(merged_branches) > 1:
+                # Create a virtual ControlNode for comparison
+                virtual_control = ControlNode(ControlType.IF)
+                for branch in merged_branches:
+                    virtual_control.add_branch(branch)
+                normalized.append(virtual_control)
+            else:
+                # Single IF, keep as is
+                normalized.append(child)
+        else:
+            normalized.append(child)
+            i += 1
+    
+    return normalized
+
+
+def _are_regions_mutually_exclusive(branches: List[BranchNode]) -> bool:
+    """
+    Check if the regions of a list of branches are mutually exclusive.
+    """
+    for i, b1 in enumerate(branches):
+        for j, b2 in enumerate(branches):
+            if i < j:
+                # Check if regions intersect
+                intersection = b1.region.intersect(b2.region)
+                if not intersection.is_empty():
+                    return False
+    return True
+
+
+def cdg_equivalent(cdg1: BodyNode, cdg2: BodyNode) -> Tuple[bool, str]:
+    """
+    Check if two CDGs are semantically equivalent.
+    
+    Unlike cdg_similarity which returns continuous scores, this returns
+    a boolean indicating exact semantic equivalence.
+    
+    Args:
+        cdg1: First CDG
+        cdg2: Second CDG
+    
+    Returns:
+        Tuple of (is_equivalent: bool, reason: str)
+        - reason is empty string if equivalent, otherwise describes the difference
+    """
+    return _nodes_equivalent(cdg1, cdg2)
+
+
+def _nodes_equivalent(node1: CDGNode, node2: CDGNode) -> Tuple[bool, str]:
+    """
+    Recursively check if two nodes are semantically equivalent.
+    """
+    # Different node types
+    if type(node1) != type(node2):
+        return False, f"Different node types: {type(node1).__name__} vs {type(node2).__name__}"
+    
+    # BodyNode
+    if isinstance(node1, BodyNode):
+        return _body_nodes_equivalent(node1, node2)
+    
+    # InputNode
+    elif isinstance(node1, InputNode):
+        return _input_nodes_equivalent(node1, node2)
+    
+    # ControlNode
+    elif isinstance(node1, ControlNode):
+        return _control_nodes_equivalent(node1, node2)
+    
+    # BranchNode
+    elif isinstance(node1, BranchNode):
+        return _branch_nodes_equivalent(node1, node2)
+    
+    # ActionNode
+    elif isinstance(node1, ActionNode):
+        return _action_nodes_equivalent(node1, node2)
+    
+    # Unknown node type - compare by signature
+    return node1.semantic_signature() == node2.semantic_signature(), "Unknown node type comparison"
+
+
+def _body_nodes_equivalent(node1: BodyNode, node2: BodyNode) -> Tuple[bool, str]:
+    """Check if two body nodes are equivalent."""
+    # Normalize consecutive IF statements before comparing
+    children1 = _normalize_consecutive_ifs(node1.children)
+    children2 = _normalize_consecutive_ifs(node2.children)
+    
+    # Must have same number of children after normalization
+    if len(children1) != len(children2):
+        return False, f"Different number of children: {len(children1)} vs {len(children2)}"
+    
+    # Compare children in order
+    for i, (child1, child2) in enumerate(zip(children1, children2)):
+        equiv, reason = _nodes_equivalent(child1, child2)
+        if not equiv:
+            return False, f"Child {i}: {reason}"
+    
+    return True, ""
+
+
+def _input_nodes_equivalent(node1: InputNode, node2: InputNode) -> Tuple[bool, str]:
+    """Check if two input nodes are equivalent."""
+    # Must have same input type
+    if node1.input_type != node2.input_type:
+        return False, f"Different input types: {node1.input_type} vs {node2.input_type}"
+    
+    # Compare prompt categories (classified during CDG construction)
+    # If both have categories, compare them
+    if node1.prompt_category and node2.prompt_category:
+        if node1.prompt_category != node2.prompt_category:
+            return False, f"Different prompt categories: '{node1.prompt_category}' vs '{node2.prompt_category}'"
+        return True, ""
+    
+    # Fallback: if categories not available, use semantic similarity
+    if not messages_semantically_similar(node1.prompt, node2.prompt):
+        return False, f"Different prompts: '{node1.prompt}' vs '{node2.prompt}'"
+    
+    return True, ""
+
+
+def _control_nodes_equivalent(node1: ControlNode, node2: ControlNode) -> Tuple[bool, str]:
+    """Check if two control nodes are equivalent."""
+    # Must have same control type
+    if node1.control_type != node2.control_type:
+        return False, f"Different control types: {node1.control_type} vs {node2.control_type}"
+    
+    # Must have same number of branches
+    if len(node1.branches) != len(node2.branches):
+        return False, f"Different number of branches: {len(node1.branches)} vs {len(node2.branches)}"
+    
+    # Compare branches - order independent (match by region)
+    matched2 = set()
+    for branch1 in node1.branches:
+        found_match = False
+        for j, branch2 in enumerate(node2.branches):
+            if j in matched2:
+                continue
+            equiv, _ = _branch_nodes_equivalent(branch1, branch2)
+            if equiv:
+                matched2.add(j)
+                found_match = True
+                break
+        if not found_match:
+            return False, f"No matching branch for region {branch1.region}"
+    
+    # Must have same number of children (for while True loops)
+    if len(node1.children) != len(node2.children):
+        return False, f"Different number of control children: {len(node1.children)} vs {len(node2.children)}"
+    
+    # Compare children in order
+    for i, (child1, child2) in enumerate(zip(node1.children, node2.children)):
+        equiv, reason = _nodes_equivalent(child1, child2)
+        if not equiv:
+            return False, f"Control child {i}: {reason}"
+    
+    return True, ""
+
+
+def _branch_nodes_equivalent(node1: BranchNode, node2: BranchNode) -> Tuple[bool, str]:
+    """Check if two branch nodes are equivalent."""
+    # Must have same region
+    if node1.region != node2.region:
+        return False, f"Different regions: {node1.region} vs {node2.region}"
+    
+    # Must have same number of children
+    if len(node1.children) != len(node2.children):
+        return False, f"Different number of branch children: {len(node1.children)} vs {len(node2.children)}"
+    
+    # Compare children in order
+    for i, (child1, child2) in enumerate(zip(node1.children, node2.children)):
+        equiv, reason = _nodes_equivalent(child1, child2)
+        if not equiv:
+            return False, f"Branch child {i}: {reason}"
+    
+    return True, ""
+
+
+def _action_nodes_equivalent(node1: ActionNode, node2: ActionNode) -> Tuple[bool, str]:
+    """Check if two action nodes are equivalent."""
+    # Must have same action type
+    if node1.action_type != node2.action_type:
+        return False, f"Different action types: {node1.action_type} vs {node2.action_type}"
+    
+    # For print actions, use semantic message comparison
+    if node1.action_type == ActionType.PRINT:
+        if not messages_semantically_similar(node1.message, node2.message):
+            return False, f"Different messages: '{node1.message}' vs '{node2.message}'"
+    
+    # For return actions, compare values
+    elif node1.action_type == ActionType.RETURN:
+        if node1.value != node2.value:
+            return False, f"Different return values: {node1.value} vs {node2.value}"
+    
+    return True, ""
+
+
+def programs_equivalent(code1: str, code2: str) -> Tuple[bool, str]:
+    """
+    Check if two programs are semantically equivalent.
+    
+    Args:
+        code1: First program source code
+        code2: Second program source code
+    
+    Returns:
+        Tuple of (is_equivalent: bool, reason: str)
+        - reason is empty string if equivalent, otherwise describes the difference
+    
+    Example:
+        >>> code1 = '''
+        ... def main():
+        ...     h = float(input("Height: "))
+        ...     if h > 1.6 and h < 1.9:
+        ...         print("OK")
+        ...     else:
+        ...         print("Not OK")
+        ... '''
+        >>> code2 = '''
+        ... def main():
+        ...     height = float(input("Height: "))
+        ...     if 1.6 < height < 1.9:
+        ...         print("OK")
+        ...     else:
+        ...         print("Not OK")
+        ... '''
+        >>> programs_equivalent(code1, code2)
+        (True, '')
+    """
+    try:
+        cdg1 = build_cdg(code1)
+        cdg2 = build_cdg(code2)
+        return cdg_equivalent(cdg1, cdg2)
+    except Exception as e:
+        return False, f"Error parsing code: {str(e)}"
 

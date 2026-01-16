@@ -207,9 +207,6 @@ To use this system, you'll need to provide your own:
 
 This project is for research purposes. Please contact the authors for licensing information.
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📚 Citation
 
@@ -227,5 +224,5 @@ If you use this code in your research, please cite:
 
 ## 📧 Contact
 
-For questions or collaboration inquiries, please open an issue or contact [your email].
+For questions or collaboration inquiries, please open an issue or contact huijunm@stanford.edu.
 
