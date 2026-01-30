@@ -16,10 +16,28 @@ from typing import Dict, List, Any, Tuple
 class Grader:
     """
     Initial grader that evaluates student code against a rubric.
+    
+    Args:
+        lenient_messages: If True, be lenient about input/output/print message wording.
+            As long as the semantic meaning is similar, consider them correct.
+            Default is False (strict mode - exact matching per rubric).
     """
     
-    def __init__(self):
+    def __init__(self, lenient_messages: bool = False):
         self.client = OpenAIClient().get_client()
+        self.lenient_messages = lenient_messages
+        
+        # Additional prompt for lenient message grading
+        self._lenient_prompt = """
+IMPORTANT - MESSAGE LENIENCY:
+Be lenient about input prompts, output messages, and print statements. 
+As long as the semantic meaning is similar, consider them correct. For example:
+- "Enter height in meters:" vs "Please input your height:" → Both acceptable
+- "Above maximum astronaut height" vs "Too tall for astronaut requirements" → Both acceptable  
+- "You qualify!" vs "Congratulations, you meet the requirements!" → Both acceptable
+Do NOT penalize for minor wording differences, capitalization, punctuation, or phrasing 
+variations in messages. Focus on whether the MESSAGE INTENT is correct, not exact wording.
+"""
     
     def grade(self, code: str, rubric: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -47,8 +65,11 @@ class Grader:
         """
         rubric_text = format_rubric(rubric)
         
+        # Add lenient message instruction if enabled
+        lenient_section = self._lenient_prompt if self.lenient_messages else ""
+        
         prompt = f"""You are a grading assistant. Grade the following student code against the provided rubric.
-
+{lenient_section}
 RUBRIC:
 {rubric_text}
 
@@ -112,9 +133,12 @@ Respond ONLY with a valid JSON object in this exact format:
             for item_id, score in initial_grading.get('scores', {}).items()
         ])
         
+        # Add lenient message instruction if enabled
+        lenient_section = self._lenient_prompt if self.lenient_messages else ""
+        
         prompt = f"""You previously graded this code. A critic has reviewed your grading. 
 Consider their critique carefully and decide whether to revise your grades.
-
+{lenient_section}
 RUBRIC:
 {rubric_text}
 
@@ -165,10 +189,28 @@ Respond with valid JSON in this exact format:
 class Critic:
     """
     Critic that reviews the initial grading for fairness and accuracy.
+    
+    Args:
+        lenient_messages: If True, critique should account for leniency about 
+            input/output/print message wording. Default is False (strict mode).
     """
     
-    def __init__(self):
+    def __init__(self, lenient_messages: bool = False):
         self.client = OpenAIClient().get_client()
+        self.lenient_messages = lenient_messages
+        
+        # Additional prompt for lenient message grading
+        self._lenient_prompt = """
+IMPORTANT - MESSAGE LENIENCY POLICY:
+When critiquing grades related to input prompts, output messages, and print statements,
+remember that we are being LENIENT about message wording. As long as the semantic meaning 
+is correct, minor wording differences should NOT be penalized. For example:
+- Different phrasing with same intent → Acceptable
+- Minor spelling/capitalization differences → Acceptable  
+- Same message category (e.g., "too tall" messages) → Acceptable
+Do NOT critique the grader for being lenient on message wording. Focus on LOGIC and 
+FUNCTIONALITY rather than exact message text.
+"""
     
     def critique(
         self,
@@ -195,8 +237,11 @@ class Critic:
             for item_id, score in initial_grading.get('scores', {}).items()
         ])
         
+        # Add lenient message instruction if enabled
+        lenient_section = self._lenient_prompt if self.lenient_messages else ""
+        
         prompt = f"""You are a critical reviewer of grading work. Review the following grading decisions carefully.
-
+{lenient_section}
 RUBRIC:
 {rubric_text}
 
@@ -245,11 +290,17 @@ class AdversarialGradingSystem:
     1. Initial grading
     2. Critique
     3. Response and potential revision
+    
+    Args:
+        lenient_messages: If True, both grader and critic will be lenient about 
+            input/output/print message wording. As long as the semantic meaning 
+            is similar, consider them correct. Default is False (strict mode).
     """
     
-    def __init__(self):
-        self.grader = Grader()
-        self.critic = Critic()
+    def __init__(self, lenient_messages: bool = False):
+        self.lenient_messages = lenient_messages
+        self.grader = Grader(lenient_messages=lenient_messages)
+        self.critic = Critic(lenient_messages=lenient_messages)
     
     def adversarial_grade(
         self,
