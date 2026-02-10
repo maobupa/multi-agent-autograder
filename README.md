@@ -283,14 +283,11 @@ jupyter notebook cdg/cdg_clustering.ipynb
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
 
 ## 🙏 Acknowledgments
 
 - Thanks to the students whose anonymized code submissions were used in this research
+- Thanks to the graders who contributed
 - Built using OpenAI's GPT models
 - Inspired by research in automated program grading and semantic program analysis
 
