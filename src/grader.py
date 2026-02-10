@@ -8,8 +8,8 @@ This module implements a two-stage grading system where:
 """
 
 import json
-from openai_client import OpenAIClient
-from utils import format_rubric
+from .openai_client import OpenAIClient
+from .utils import format_rubric
 from typing import Dict, List, Any, Tuple
 
 

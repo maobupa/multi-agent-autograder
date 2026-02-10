@@ -1,20 +1,15 @@
-"""
-This script is used to grade the submissions using the adversarial grading system.
-There might be a bug in the analysis of change/delta, need to check later
-"""
-
 import pandas as pd
 import json
 import time
-from grader import AdversarialGradingSystem
+from src.grader import AdversarialGradingSystem
 import os
 
 
 def main():
     # === CONFIGURATION ===
-    INPUT_CSV_PATH = "data/graded/diag1_100_random_batch1.csv"
+    INPUT_CSV_PATH = "data/cip5/processed/cip5_student_data.csv"
     RUBRIC_PATH = "data/rubrics/raw/diagnostic1/rubric.json"
-    OUTPUT_CSV_PATH = "results/diag1_batch1.csv"
+    OUTPUT_CSV_PATH = "results/diag1_100.csv"
 
     # create output directory if not exist
     os.makedirs(os.path.dirname(OUTPUT_CSV_PATH), exist_ok=True)
@@ -23,8 +18,9 @@ def main():
     print("Loading CSV file...")
     df = pd.read_csv(INPUT_CSV_PATH)
 
-    # No filtering - process all rows
-    print(f"Selected {len(df)} rows for grading.")
+    # Filter by diagnostic1 and select first 100 rows
+    df_filtered = df[df["diag_exercise"] == "diagnostic1"].head(100)
+    print(f"Selected {len(df_filtered)} diagnostic1 rows for grading.")
 
     # === LOAD RUBRIC ===
     print("Loading rubric...")
@@ -45,19 +41,16 @@ def main():
         completed_ids = set()
         results = []
 
-    for i, row in df.iterrows():
-        student_id = row["student_id"]
-        if student_id in completed_ids:
-            continue  # Skip if already graded
-        
+    for i, row in df_filtered.iterrows():
+        if row.get("id", i) in completed_ids:
+            continue # Skip if already graded
         code = row["code"]
         try:
-            print(f"\n[{i}] Grading submission for student_id: {student_id}...")
+            print(f"\n[{i}] Grading submission...")
             result = system.adversarial_grade(code, rubric)
             # Flatten/serialize nested fields
             flat_result = {
-                "student_id": student_id,
-                "code": code,
+                "id": row.get("id", i),
                 "initial_grade": json.dumps(result.get("initial_grade", {}), ensure_ascii=False),
                 "final_grade": json.dumps(result.get("final_grade", {}), ensure_ascii=False),
                 "change": json.dumps(result.get("change", {}), ensure_ascii=False),
@@ -73,7 +66,7 @@ def main():
                 time.sleep(1)
 
         except Exception as e:
-            print(f"Error grading student_id {student_id} (row {i}): {e}")
+            print(f"Error grading row {i}: {e}")
             continue
 
     # === FINAL SAVE ===
@@ -83,4 +76,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

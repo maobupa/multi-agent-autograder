@@ -22,8 +22,8 @@ import os
 import argparse
 from tqdm import tqdm
 
-from llm_agents import PerturbationAgent
-from grader import AdversarialGradingSystem
+from src.llm_agents import PerturbationAgent
+from src.grader import AdversarialGradingSystem
 
 
 def load_rubric(rubric_path: str = "data/rubrics/raw/diagnostic1/rubric.json") -> dict:

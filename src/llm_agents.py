@@ -9,7 +9,7 @@ This module provides LLM-based agents that can be reused across different script
 
 import json
 from typing import Dict, Any, Optional, Literal
-from openai_client import OpenAIClient
+from .openai_client import OpenAIClient
 
 
 # Global cache for message classifications to avoid repeated LLM calls

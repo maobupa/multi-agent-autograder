@@ -10,7 +10,9 @@ A data structure for representing Python programs as decision trees, abstracting
    - [Interval Arithmetic](#interval-arithmetic)
    - [CDG Node Types](#cdg-node-types)
 4. [CDG Builder](#cdg-builder)
-5. [Similarity Computation](#similarity-computation)
+5. [Equivalence Computation](#equivalence-computation)
+   - [Semantic Message Comparison](#semantic-message-comparison)
+   - [Control Flow Normalization](#control-flow-normalization)
 6. [Usage Examples](#usage-examples)
 
 ---
@@ -382,80 +384,219 @@ Automatically converts Python conditions to regions:
 
 ---
 
-## Similarity Computation
+## Equivalence Computation
 
 ### Overview
 
-The `cdg_similarity()` function compares two CDGs and returns multiple similarity scores:
+The CDG framework uses **boolean equivalence checking** rather than continuous similarity scores. The main function is `programs_equivalent()`:
 
 ```python
-def cdg_similarity(cdg1: BodyNode, cdg2: BodyNode) -> Dict[str, float]
+def programs_equivalent(code1: str, code2: str) -> Tuple[bool, str]
 ```
 
-### Similarity Metrics
+**Returns:**
+- `(True, "")` if programs are semantically equivalent
+- `(False, reason)` if not equivalent, where `reason` describes the difference
 
-| Metric | Description | What It Compares |
-|--------|-------------|------------------|
-| `structural` | Control flow structure similarity | Control types, branch counts, regions (NOT action content) |
-| `behavioral` | Input/output behavior similarity | Weighted: 30% input + 70% action |
-| `regional` | Decision region similarity | Set of all regions (Jaccard) |
-| `input` | Input similarity | Input types (ignores variable names/prompts) |
-| `action` | Action similarity | Print messages, return values |
-| `overall` | Weighted combination | 20% structural + 30% behavioral + 50% regional |
+### How Equivalence Works
 
-### Computation Details
+Two programs are equivalent if their CDGs match on all semantic components:
 
-#### Structural Similarity
+1. **Same input types** (variable names ignored)
+2. **Same decision regions** (order-independent branch matching)
+3. **Same actions** with semantically similar messages
 
-Compares the **shape** of the decision tree without considering action content:
+The comparison is done recursively through the CDG tree structure.
 
-```
-structural_signature includes:
-- Input types (but not prompts)
-- Control node types and branch counts
-- Branch regions (but not branch content)
-- Action types (but not messages/values)
-```
+---
 
-If exact signatures match → `1.0`
-Otherwise → weighted combination:
-- 30% control node similarity
-- 50% region similarity  
-- 20% input type similarity
+### Node-by-Node Equivalence
 
-#### Behavioral Similarity
+Each node type has specific equivalence rules:
 
-```
-behavioral = 0.3 × input_similarity + 0.7 × action_similarity
+#### BodyNode Equivalence
+
+```python
+_body_nodes_equivalent(node1, node2)
 ```
 
-- **Input similarity**: Jaccard of input type signatures
-- **Action similarity**: Jaccard of full action signatures (including messages)
+- Must have same number of children
+- Children compared in order
+- **Normalization**: Consecutive single-branch IFs are merged for comparison
+  - `if A: ... if B: ... if C: ...` is equivalent to `if A: ... elif B: ... elif C: ...`
+  - (when regions are mutually exclusive)
 
-#### Regional Similarity
+#### InputNode Equivalence
 
-```
-regional = Jaccard(regions_1, regions_2)
-```
-
-Uses string representation of regions for set comparison.
-
-#### Overall Similarity
-
-```
-overall = 0.2 × structural + 0.3 × behavioral + 0.5 × regional
+```python
+_input_nodes_equivalent(node1, node2)
 ```
 
-### Jaccard Similarity
+- Must have same `input_type` (`'float'`, `'int'`, `'str'`)
+- Prompt comparison uses semantic classification:
+  - If both have `prompt_category` → compare categories
+  - Otherwise → use `messages_semantically_similar()`
 
-Used for all set comparisons:
+#### ControlNode Equivalence
 
+```python
+_control_nodes_equivalent(node1, node2)
 ```
-Jaccard(A, B) = |A ∩ B| / |A ∪ B|
+
+- Must have same `control_type` (`IF`, `WHILE`, `FOR`)
+- Must have same number of branches
+- **Order-independent branch matching**: Branches matched by region, not position
+- Children compared in order (for `while True` loops)
+
+#### BranchNode Equivalence
+
+```python
+_branch_nodes_equivalent(node1, node2)
 ```
 
-- Returns `1.0` if both sets are empty
-- Returns `0.0` if one set is empty and other is not
+- Must have **identical regions** (exact interval match)
+- Must have same number of children
+- Children compared in order
+
+#### ActionNode Equivalence
+
+```python
+_action_nodes_equivalent(node1, node2)
+```
+
+- Must have same `action_type`
+- For `PRINT` actions: messages compared using semantic similarity
+- For `RETURN` actions: values must match exactly
+
+---
+
+### Semantic Message Comparison
+
+Print messages and input prompts are compared using **fuzzy semantic matching**, not exact string comparison.
+
+#### `messages_semantically_similar(msg1, msg2)`
+
+```python
+def messages_semantically_similar(msg1: str, msg2: str) -> bool
+```
+
+Messages are similar if they convey the same **directional meaning**:
+
+| Category | Example Messages |
+|----------|------------------|
+| `above` | "Above max height", "Too tall", "Exceeds maximum" |
+| `below` | "Below minimum", "Too short", "Under the limit" |
+| `correct` | "OK", "Valid height", "Acceptable", "Pass" |
+| `incorrect` | "Invalid", "Wrong", "Fail", "Error" |
+
+**Matching Strategy:**
+
+1. **Exact match** (after normalization) → `True`
+2. **LLM classification** (if enabled):
+   - Uses `MessageClassifierAgent` to classify both messages
+   - Same non-"other" category → `True`
+3. **Fuzzy fallback** (if LLM unavailable):
+   - Extract semantic features using keyword matching
+   - Compare directional indicators
+
+#### Fuzzy Matching Details
+
+```python
+_extract_message_semantics(msg) → {
+    'direction': 'above' | 'below' | 'correct' | 'incorrect' | None,
+    'has_limit_word': bool,
+    'is_positive': bool | None
+}
+```
+
+**Direction Keywords:**
+- `above`: above, over, high, tall, exceed, greater
+- `below`: below, under, low, short, less, smaller
+- `correct`: correct, ok, good, valid, acceptable, pass, success
+- `incorrect`: incorrect, wrong, invalid, fail, error, bad
+
+**Levenshtein Distance** is used for typo tolerance (max distance = 1-2 characters).
+
+---
+
+### Control Flow Normalization
+
+The framework handles syntactic variations in control flow:
+
+#### Consecutive IF Normalization
+
+```python
+_normalize_consecutive_ifs(children)
+```
+
+Consecutive single-branch IF statements are merged into a virtual multi-branch structure:
+
+```python
+# These are treated as equivalent:
+
+# Version A: Separate ifs
+if height < 1.6:
+    print("Too short")
+if height > 1.9:
+    print("Too tall")
+
+# Version B: if/elif chain
+if height < 1.6:
+    print("Too short")
+elif height > 1.9:
+    print("Too tall")
+```
+
+This works when the regions are **mutually exclusive**.
+
+---
+
+### Example: Equivalence Check
+
+```python
+from cdg import programs_equivalent
+
+code_a = '''
+def main():
+    h = float(input("Height: "))
+    if h < 1.6:
+        print("Below minimum")
+    elif h > 1.9:
+        print("Above maximum")
+    else:
+        print("OK")
+'''
+
+code_b = '''
+def main():
+    height = float(input("Enter height: "))
+    if height < 1.6:
+        print("Too short")  # Different wording, same meaning
+    elif height > 1.9:
+        print("Too tall")   # Different wording, same meaning
+    else:
+        print("Valid")      # Different wording, same meaning
+'''
+
+is_equiv, reason = programs_equivalent(code_a, code_b)
+# Result: (True, "") - Programs are semantically equivalent
+```
+
+### Non-Equivalent Example
+
+```python
+code_c = '''
+def main():
+    height = float(input("Height: "))
+    if height < 1.6:
+        print("Too short")
+    elif height > 1.8:  # Different threshold!
+        print("Too tall")
+'''
+
+is_equiv, reason = programs_equivalent(code_a, code_c)
+# Result: (False, "No matching branch for region (1.9, ∞)")
+```
 
 ---
 
@@ -464,7 +605,7 @@ Jaccard(A, B) = |A ∩ B| / |A ∪ B|
 ### Basic Usage
 
 ```python
-from cdg import build_cdg, compare_programs, print_cdg
+from cdg import build_cdg, programs_equivalent, print_cdg
 
 # Build and print a CDG
 code = '''
@@ -493,7 +634,7 @@ BodyNode(main)
       ActionNode(print, msg="Just right")
 ```
 
-### Comparing Programs
+### Checking Program Equivalence
 
 ```python
 code_a = '''
@@ -514,8 +655,8 @@ def main():
         print("Not OK")
 '''
 
-similarity = compare_programs(code_a, code_b)
-# Result: All metrics = 1.0 (semantically identical)
+is_equiv, reason = programs_equivalent(code_a, code_b)
+# Result: (True, "") - Semantically identical despite syntactic differences
 ```
 
 ### Working with CDG Objects
@@ -571,17 +712,35 @@ BodyNode("main")
 
 ---
 
-## Interpretation Guide
+## Interpreting Equivalence Results
 
-### When Structural = 1.0 but Action < 1.0
+The `programs_equivalent()` function returns a tuple `(is_equivalent, reason)`. When programs are **not** equivalent, the `reason` string explains why:
 
-The programs have the same decision tree shape but different output messages (possibly typos).
+### Common Non-Equivalence Reasons
 
-### When Regional = 1.0 but Structural < 1.0
+| Reason Pattern | Meaning |
+|----------------|---------|
+| `"Different input types: float vs int"` | One program converts input to float, the other to int |
+| `"Different regions: (-∞, 1.6) vs (-∞, 1.7)"` | Different threshold values in conditions |
+| `"No matching branch for region X"` | One program has a decision branch the other lacks |
+| `"Different messages: 'Too tall' vs 'Error'"` | Print statements have semantically different meanings |
+| `"Different number of branches: 2 vs 3"` | Control structures have different branch counts |
+| `"Different control types: if vs while"` | Different control flow structure types |
 
-Same decision regions but different control flow (e.g., one uses `while True`, the other doesn't).
+### What Makes Programs Equivalent
 
-### When All = 1.0
+Programs are considered equivalent when:
 
-Programs are semantically equivalent—they will produce the same outputs for the same inputs.
+1. **Same input handling**: Same type conversions (`float`, `int`, `str`)
+2. **Same decision regions**: Identical numeric intervals (thresholds must match exactly)
+3. **Same branch structure**: Same number of branches covering same regions
+4. **Semantically similar messages**: Print messages convey the same meaning (direction/category)
+
+### What Does NOT Affect Equivalence
+
+- Variable names (`h` vs `height` vs `user_height`)
+- Prompt wording variations (`"Height:"` vs `"Enter your height:"`)
+- Message wording variations within same category (`"Too tall"` vs `"Above maximum"`)
+- Condition syntax (`h > 1.6 and h < 1.9` vs `1.6 < h < 1.9`)
+- Branch order in if/elif chains
 

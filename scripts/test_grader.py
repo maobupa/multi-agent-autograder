@@ -3,7 +3,7 @@ Simple test script for the adversarial grading system.
 """
 
 import json
-from grader import AdversarialGradingSystem
+from src.grader import AdversarialGradingSystem
 
 
 def test_simple_case():

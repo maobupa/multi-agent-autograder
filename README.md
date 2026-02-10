@@ -1,228 +1,299 @@
-# Adversarial Grading System
+# Adversarial Grading: An LLM-Based Framework for Robust Code Assessment
 
-An LLM-based automated grading system that uses adversarial debate to improve grading accuracy and consistency. This system implements a two-stage grading process where an initial grader evaluates student code, a critic reviews the grading for fairness and edge cases, and the grader responds and potentially revises their assessment.
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+This repository contains the implementation and experiments for Consistency-Based Evaluation of LLM Grading Systems in Computer Science Educations. 
+
+## 📋 Table of Contents
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Repository Structure](#repository-structure)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core Components](#core-components)
+- [Experiments](#experiments)
+- [Citation](#citation)
 
 ## 🎯 Overview
 
-This project explores the use of Large Language Models (LLMs) for automated code grading with a focus on:
-- **Adversarial Grading**: A multi-agent approach where a critic challenges the initial grading to improve accuracy
-- **Human-AI Comparison**: Comprehensive analysis comparing LLM grades with multiple human graders
-- **Consistency Testing**: Perturbation tests to evaluate grading stability under surface-level code changes
+Automated code grading faces challenges in consistency, especially when evaluating semantically equivalent but syntactically different programs. This project introduces:
 
-## 🏗️ Architecture
+1. **Multi-agent Grading System**: A two-stage grading framework where a Grader evaluates code and a Critic reviews the grading for fairness and accuracy.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    AdversarialGradingSystem                 │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────┐  │
-│  │   Grader    │───▶│   Critic    │───▶│ Grader (Revise) │  │
-│  │  (Initial)  │    │  (Review)   │    │    (Final)      │  │
-│  └─────────────┘    └─────────────┘    └─────────────────┘  │
-│        │                  │                    │            │
-│        ▼                  ▼                    ▼            │
-│   Initial Grade      Critique           Final Grade         │
-└─────────────────────────────────────────────────────────────┘
-```
+2. **Cognitive Decision Graph (CDG)**: A novel representation that abstracts programs into decision trees, capturing semantic equivalence while ignoring surface-level differences.
 
-## 📁 Project Structure
+3. **Comprehensive Evaluation**: Experiments demonstrating improved consistency compared to single-pass LLM grading and majority voting baselines.
+
+
+## 📁 Repository Structure
 
 ```
 adversarial_grader/
-├── grader.py              # Core adversarial grading system (Grader, Critic, AdversarialGradingSystem)
-├── grading.py             # Main script to run grading on submissions
-├── openai_client.py       # Shared OpenAI client utility (singleton pattern)
-├── utils.py               # Utility functions (rubric formatting)
-├── llm_agents.py          # Reusable LLM agents (PerturbationAgent, SummarizationAgent, CodeAnalysisAgent)
-├── perturbation.py        # Perturbation test for grading consistency
-├── grading_analysis.py    # Statistical analysis of grading results
-├── prepare_analysis.py    # Data compilation for analysis
-├── sampling.py            # Sampling utilities for creating grading datasets
-├── grading_visualizations.ipynb    # Visualization notebook for grading analysis
-├── perturbation_analysis.ipynb     # Analysis of perturbation test results
-├── data/                  # (not tracked - see Data Privacy section)
-│   └── rubrics/           # Grading rubrics (JSON format)
-├── requirements.txt       # Python dependencies
-└── .gitignore            # Git ignore rules
+├── src/                           # Core library
+│   ├── grader.py                  # Adversarial grading system
+│   ├── llm_agents.py              # Reusable LLM agents
+│   ├── openai_client.py           # OpenAI API client
+│   ├── sampling.py                # Sampling utilities
+│   └── utils.py                   # Helper functions
+│
+├── cdg/                           # Cognitive Decision Graph
+│   ├── README.md                  # CDG documentation
+│   ├── cdg.py                     # CDG implementation
+│   ├── cdg_demo.ipynb             # Interactive demo
+│   ├── cdg_clustering.ipynb       # Program clustering analysis
+│   └── consistency_analysis.ipynb # Consistency evaluation
+│
+├── experiments/                   # Experimental scripts
+│   ├── grading/                   # Grading experiments
+│   │   ├── grading.py             # Main grading script
+│   │   ├── lenient_grading.py     # Lenient message mode
+│   │   ├── majority_baseline.py   # Baseline comparison
+│   │   ├── prepare_analysis.py    # Data preparation
+│   │   ├── grading_analysis.py    # Statistical analysis
+│   │   └── grading_visualizations.ipynb
+│   │
+│   └── perturbation/              # Perturbation testing
+│       ├── perturbation.py        # Perturbation generation & testing
+│       └── perturbation_analysis.ipynb
+│
+├── scripts/                       # Entry point scripts
+│   ├── run_diag1_100.py           # Run grading on dataset
+│   └── test_grader.py             # Unit tests
+│
+├── data/                          # Data directory (Protected, Not uploaded here)
+│   ├── rubrics/                   # Grading rubrics
+│   └── graded/                    # Student submissions
+│
+└── results/                       # Output directory (Protected, Not uploaded here)
+    └── analysis/                  # Analysis results
 ```
 
-## 🚀 Getting Started
+## 🚀 Installation
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.8 or higher
 - OpenAI API key
 
-### Installation
+### Setup
 
-1. Clone the repository:
+1. **Clone the repository**
 ```bash
 git clone https://github.com/yourusername/adversarial_grader.git
 cd adversarial_grader
 ```
 
-2. Install dependencies:
+2. **Install the package**
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
-3. Set up your OpenAI API key:
+This installs the package in development mode, allowing you to import from `src` anywhere.
+
+3. **Set up OpenAI API key**
 ```bash
-# Create a .env file
-echo "OPENAI_API_KEY=your_api_key_here" > .env
+export OPENAI_API_KEY='your-api-key-here'
 ```
 
-### Usage
+Or create a `.env` file:
+```
+OPENAI_API_KEY=your-api-key-here
+```
 
-#### Basic Grading
+### Dependencies
+
+The setup will automatically install:
+- `openai` - OpenAI API client
+- `pandas` - Data manipulation
+- `numpy` - Numerical operations
+- `matplotlib`, `seaborn` - Visualizations
+- `tqdm` - Progress bars
+- `krippendorff` - Inter-rater reliability
+
+## 🎮 Quick Start
+
+### 1. Test the Grader
+
+```bash
+python scripts/test_grader.py
+```
+
+This runs the multi-agent grading system on a sample program and displays the grading results.
+
+### 2. Grade a Dataset
+
+```bash
+python scripts/run_diag1_100.py
+```
+
+Grades 100 student submissions using the adversarial framework.
+
+### 3. Explore CDG
+
+Open and run `cdg/cdg_demo.ipynb` to see how CDG represents and clusters programs.
+
+### 4. Analyze Results
+
+```bash
+python experiments/grading/grading_analysis.py \
+    --input results/diag1_batch1.csv \
+    --output results/analysis/
+```
+
+Generates comprehensive analysis of grading consistency and agreement.
+
+## 🔧 Core Components
+
+### Multi-agent Grading System
+
+The main grading framework consists of three agents:
 
 ```python
-from grader import AdversarialGradingSystem
-import json
-
-# Load rubric
-with open("data/rubrics/raw/diagnostic1/rubric.json", "r") as f:
-    rubric = json.load(f)
+from src.grader import AdversarialGradingSystem
 
 # Initialize system
-system = AdversarialGradingSystem()
+system = AdversarialGradingSystem(lenient_messages=False)
 
-# Grade a submission
-code = '''
-def main():
-    height = float(input("Enter your height in meters: "))
-    if height > 1.6 and height < 1.9:
-        print("Correct height to be an astronaut")
-    elif height <= 1.6:
-        print("Below minimum astronaut height")
-    else:
-        print("Above maximum astronaut height")
+# Grade student code
+result = system.adversarial_grade(
+    code=student_code,
+    rubric=rubric_dict
+)
 
-if __name__ == "__main__":
-    main()
-'''
-
-result = system.adversarial_grade(code, rubric)
-
-print("Initial Grade:", result['initial_grade'])
-print("Final Grade:", result['final_grade'])
-print("Changes:", result['change'])
+# Access results
+print(result['final_grading'])  # Final grades after critique
+print(result['critique'])        # Critic's feedback
+print(result['changes'])         # Grade changes made
 ```
 
-#### Running Batch Grading
+**Key Parameters:**
+- `lenient_messages`: If True, accepts semantically similar print messages
+- Returns both initial and final grades with detailed explanations
+
+### Cognitive Decision Graph (CDG)
+
+CDG abstracts programs into semantic decision trees:
+
+```python
+from cdg.cdg import build_cdg, programs_equivalent
+
+# Build CDG for a program
+cdg = build_cdg(code)
+
+# Check semantic equivalence
+is_equiv, reason = programs_equivalent(code1, code2)
+```
+
+**Features:**
+- Abstracts away variable names, statement ordering
+- Captures decision regions (e.g., `height < 1.6`)
+- Semantic message classification (uses LLM)
+
+See `cdg/README.md` for detailed documentation.
+
+### LLM Agents
+
+Reusable LLM-based components:
+
+```python
+from src.llm_agents import (
+    MessageClassifierAgent,
+    PerturbationAgent,
+    CodeAnalysisAgent
+)
+
+# Classify output messages
+classifier = MessageClassifierAgent()
+category = classifier.classify("Above maximum height")  # Returns "above"
+
+# Generate code perturbations
+perturber = PerturbationAgent()
+result = perturber.generate_perturbation(code)
+```
+
+## 📊 Experiments
+
+### Grading Consistency Analysis
+
+Compares adversarial grading against baselines:
 
 ```bash
-python grading.py
+# Run adversarial grading
+python experiments/grading/grading.py
+
+# Run majority vote baseline
+python experiments/grading/majority_baseline.py
+
+# Analyze results
+python experiments/grading/grading_analysis.py --input results/
 ```
 
-#### Running Analysis
+**Metrics Computed:**
+- Inter-grader agreement (Cohen's Kappa, Krippendorff's Alpha)
+- Grade change statistics
+- Consensus distribution
 
-```bash
-# Run all analyses
-python grading_analysis.py --all
+**Visualization:**
+- Agreement matrices
+- Grade distribution plots
+- Change heatmaps
 
-# Run specific analysis
-python grading_analysis.py --inter-rater-reliability
-python grading_analysis.py --pairwise-agreement
-python grading_analysis.py --human-vs-ai
-```
-
-#### Running Perturbation Test
-
-```bash
-python perturbation.py --num-samples 100
-```
-
-## 📊 Analysis Features
-
-### Inter-Rater Reliability
-- **Weighted Cohen's Kappa** for pairwise agreement
-- **Krippendorff's Alpha** for multi-rater reliability
-- Human-Human, Human-LLM, and LLM-LLM comparisons
-
-### Consensus Analysis
-- Unanimous agreement detection
-- Consensus distribution (strong, weak, split)
-- Majority voting comparisons
+See `experiments/grading/grading_visualizations.ipynb` for interactive analysis.
 
 ### Perturbation Testing
-- Surface-level code modifications (variable renaming, comments)
-- Self-consistency Kappa measurement
-- Exact agreement rate calculation
 
-## 🔧 Components
+Tests grading robustness under code transformations:
 
-### AdversarialGradingSystem (`grader.py`)
-The core grading system with three stages:
-1. **Grader**: Initial evaluation against rubric
-2. **Critic**: Reviews grading for fairness, edge cases, and consistency
-3. **Grader (Response)**: Considers critique and potentially revises grades
+```bash
+python experiments/perturbation/perturbation.py \
+    --input data/graded/diag1_100_random_batch1.csv \
+    --output results/perturbation_results.csv
+```
 
-### PerturbationAgent (`llm_agents.py`)
-Generates surface-level code perturbations for consistency testing:
+**Perturbation Types:**
 - Variable renaming
-- Comment addition/modification
+- Comment addition/removal
 - Whitespace changes
-- Statement reordering (where semantically valid)
+- Statement reordering (semantically equivalent)
 
-### Analysis Scripts
-- `grading_analysis.py`: Comprehensive statistical analysis
-- `prepare_analysis.py`: Data compilation from multiple graders
-- `grading_visualizations.ipynb`: Interactive visualizations
+**Analysis:**
+- Grade consistency between original and perturbed
+- Identification of sensitive grading criteria
+- Robustness metrics
 
-## 📈 Rubric Format
+See `experiments/perturbation/perturbation_analysis.ipynb` for results.
 
-Rubrics are defined in JSON format:
+### CDG Clustering
 
-```json
-{
-    "description": "Problem description...",
-    "items": [
-        {
-            "id": "input",
-            "label": "Getting input from user",
-            "options": [
-                {"optionId": 0, "label": "Correct implementation"},
-                {"optionId": 1, "label": "Minor error"},
-                {"optionId": 2, "label": "Major error"}
-            ]
-        }
-    ]
-}
+Groups semantically equivalent programs:
+
+```bash
+jupyter notebook cdg/cdg_clustering.ipynb
 ```
 
-## ⚠️ Data Privacy
-
-This project was developed for research purposes with IRB-protected student data. The following folders are excluded from version control:
-- `data/` - All data including rubrics, student submissions, and grader annotations
-- `samples/` - Sampled student submissions
-- `results/` - Grading results with student identifiers
-
-To use this system, you'll need to provide your own:
-1. Student submissions (CSV with `student_id` and `code` columns)
-2. Rubrics in `data/rubrics/raw/<diagnostic_name>/rubric.json` (JSON format as shown above)
-3. Human grader annotations (optional, for comparison studies)
-
-## 📝 License
-
-This project is for research purposes. Please contact the authors for licensing information.
+**Output:**
+- Program clusters (semantically equivalent groups)
+- Cluster size distribution
+- Representative programs for each cluster
 
 
-## 📚 Citation
+## 📄 License
 
-If you use this code in your research, please cite:
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-```bibtex
-@misc{adversarial_grader,
-  author = {Huijun},
-  title = {Multi-agent Grading System: LLM-based Automated Code Grading with Critic Review},
-  year = {2025},
-  publisher = {GitHub},
-  url = {https://github.com/maobupa/multi-agent-autograder}
-}
-```
+## 🤝 Contributing
 
-## 📧 Contact
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-For questions or collaboration inquiries, please open an issue or contact huijunm@stanford.edu.
 
+## 🙏 Acknowledgments
+
+- Thanks to the students whose anonymized code submissions were used in this research
+- Built using OpenAI's GPT models
+- Inspired by research in automated program grading and semantic program analysis
+
+---
+
+**Note**: This repository accompanies our conference paper submission. 

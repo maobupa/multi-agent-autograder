@@ -16,7 +16,7 @@ Output columns:
 import pandas as pd
 import json
 import time
-from grader import AdversarialGradingSystem
+from src.grader import AdversarialGradingSystem
 import os
 
 

@@ -10,7 +10,7 @@ This script generates baseline grading results by:
 import pandas as pd
 import json
 import time
-from grader import Grader
+from src.grader import Grader
 from statistics import mode, StatisticsError
 from tqdm import tqdm
 import os

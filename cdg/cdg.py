@@ -31,7 +31,7 @@ def _get_message_classifier():
     global _message_classifier
     if _message_classifier is None and USE_LLM_CLASSIFICATION:
         try:
-            from llm_agents import MessageClassifierAgent
+            from src.llm_agents import MessageClassifierAgent
             _message_classifier = MessageClassifierAgent()
         except ImportError:
             pass
@@ -42,7 +42,7 @@ def _get_input_prompt_classifier():
     global _input_prompt_classifier
     if _input_prompt_classifier is None and USE_LLM_CLASSIFICATION:
         try:
-            from llm_agents import InputPromptClassifierAgent
+            from src.llm_agents import InputPromptClassifierAgent
             _input_prompt_classifier = InputPromptClassifierAgent()
         except ImportError:
             pass
