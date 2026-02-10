@@ -1,9 +1,9 @@
-# Adversarial Grading: An LLM-Based Framework for Robust Code Assessment
+# Consistency-Based Evaluation of LLM Grading in Computer Science Education
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-This repository contains the implementation and experiments for Consistency-Based Evaluation of LLM Grading Systems in Computer Science Educations. 
+This repository contains the implementation and experiments for a consistency-based evaluation framework for LLM grading systems. It includes code for constructing LLM graders, cognitive decision graphs, computing consistency and consistency-aware accuracy metrics, and running experiments on introductory programming submissions graded by single-grader LLMs, multi-agent LLMs, and human graders.
 
 ## 📋 Table of Contents
 
